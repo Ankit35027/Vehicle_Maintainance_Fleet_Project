@@ -9,3 +9,4 @@ langgraph
 faiss-cpu
 pypdf
 pydantic
+sentence-transformers
