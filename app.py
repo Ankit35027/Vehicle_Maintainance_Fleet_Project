@@ -17,22 +17,19 @@ from langgraph.graph import StateGraph, END
 # ==========================================
 st.set_page_config(page_title="AI Fleet Commander", page_icon="🚛", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for a professional look
 st.markdown("""
     <style>
     .main-header {font-size: 2.5rem; font-weight: 700; color: #1E3A8A; margin-bottom: 0rem;}
     .sub-header {font-size: 1.2rem; color: #6B7280; margin-bottom: 2rem;}
-    .report-box {padding: 20px; border-radius: 10px; border: 1px solid #E5E7EB; background-color: #F9FAFB;}
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<p class="main-header">🚛 AI Fleet Commander</p>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Agentic Predictive Maintenance & Autonomous Diagnostics</p>', unsafe_allow_html=True)
 
-# Sidebar for Setup
 with st.sidebar:
     st.header("⚙️ System Configuration")
-    api_key = st.text_input("Groq API Key", type="password", help="Required to run the AI reasoning engine.")
+    api_key = st.text_input("Groq API Key", type="password")
     os.environ["GROQ_API_KEY"] = api_key
     st.markdown("---")
     st.markdown("**Agent Status:** " + ("🟢 Online" if api_key else "🔴 Offline (Needs Key)"))
@@ -42,18 +39,15 @@ with st.sidebar:
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_knowledge_base():
-    """Initializes the FAISS vector database from the PDF manual."""
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     manual_path = "manuals/maintenance_guide.pdf"
-    
     if os.path.exists(manual_path):
         loader = PyPDFLoader(manual_path)
         docs = loader.load()
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
         return FAISS.from_documents(splitter.split_documents(docs), embeddings)
     else:
-        # Fallback if PDF is missing
-        return FAISS.from_texts(["Standard rules: Oil change every 5k miles. Ground vehicle if temp > 110C or vibration > 3.0."], embeddings)
+        return FAISS.from_texts(["Standard rules: Replace brakes if poor. Ground vehicle if temp > 110C, vibration > 3.0, or battery < 12V. Check tire pressure below 30 PSI."], embeddings)
 
 vector_store = load_knowledge_base()
 retriever = vector_store.as_retriever(search_kwargs={"k": 3})
@@ -77,54 +71,59 @@ class AgentState(TypedDict):
     final_report: dict
 
 def evaluation_node(state: AgentState):
-    """Agent evaluates if the telemetry crosses danger thresholds."""
+    """Agent evaluates an expanded set of telemetry factors."""
     data = state["telemetry"]
     llm = ChatGroq(model_name="llama-3.1-8b-instant", temperature=0)
     
+    # 🟢 EXPANDED AI RULES: The LLM now looks at ALL the new factors
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "Analyze telemetry. If Vibration > 3.0, Temp > 110, or Anomalies == 'Yes', reply 'CRITICAL'. Otherwise reply 'SAFE'."),
+        ("system", """Analyze the vehicle telemetry. Mark 'CRITICAL' if ANY of these conditions are met:
+        - Vibration (G) > 3.0
+        - Engine Temp (°C) > 110
+        - Anomalies Detected == 'Yes'
+        - Tire Pressure (PSI) < 30
+        - Battery Voltage (V) < 12.0
+        - Oil Quality (%) < 15
+        - Brake Condition == 'Poor'
+        Otherwise, reply exactly with 'SAFE'."""),
         ("user", "{data}")
     ])
     response = (prompt | llm).invoke({"data": data})
     return {"risk_detected": "CRITICAL" in response.content.upper()}
 
 def routing_logic(state: AgentState):
-    """Routes the workflow based on the evaluation."""
     return "search_manuals" if state["risk_detected"] else "generate_safe_report"
 
 def retrieval_node(state: AgentState):
-    """Agent searches the vector database for specific fixes."""
-    query = f"Fixes for {state['telemetry']['Vehicle Type']} with Vibration {state['telemetry']['Vibration (G)']} and Temp {state['telemetry']['Engine Temp (C)']}"
+    t = state['telemetry']
+    query = f"Fixes for {t['Vehicle Type']} with Vibration {t['Vibration (G)']}, Temp {t['Engine Temp (C)']}, Battery {t['Battery Voltage (V)']}, Brakes {t['Brake Condition']}"
     return {"manual_excerpts": retriever.invoke(query)}
 
 def critical_report_node(state: AgentState):
-    """Agent generates a full RAG report for a vehicle at risk."""
     llm = ChatGroq(model_name="llama-3.1-8b-instant", temperature=0.1).with_structured_output(FleetReport)
     docs = "\n".join([d.page_content for d in state["manual_excerpts"]])
     
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are the Lead AI Fleet Mechanic. Draft a structured report using ONLY the provided manual excerpts to address the telemetry issues."),
+        ("system", "You are the Lead AI Fleet Mechanic. Draft a structured report using ONLY the provided manual excerpts to address the specific telemetry faults."),
         ("user", "Telemetry: {data}\n\nManual Excerpts: {docs}")
     ])
     result = (prompt | llm).invoke({"data": state["telemetry"], "docs": docs})
     return {"final_report": result.model_dump()}
 
 def safe_report_node(state: AgentState):
-    """Agent fast-tracks a safe report without doing RAG."""
     return {"final_report": {
-        "health_summary": "✅ Vehicle is operating within optimal safety parameters.",
+        "health_summary": "✅ Vehicle is operating within optimal safety parameters across all major systems.",
         "action_plan": "Continue normal dispatch operations. No immediate service required.",
         "sources": "Standard Operational Thresholds.",
         "disclaimer": "Routine visual inspections still apply before dispatch."
     }}
 
-# Compile the Agent
+# Compile Graph
 graph = StateGraph(AgentState)
 graph.add_node("evaluate", evaluation_node)
 graph.add_node("search_manuals", retrieval_node)
 graph.add_node("generate_critical", critical_report_node)
 graph.add_node("generate_safe_report", safe_report_node)
-
 graph.set_entry_point("evaluate")
 graph.add_conditional_edges("evaluate", routing_logic, {"search_manuals": "search_manuals", "generate_safe_report": "generate_safe_report"})
 graph.add_edge("search_manuals", "generate_critical")
@@ -133,25 +132,39 @@ graph.add_edge("generate_safe_report", END)
 agent = graph.compile()
 
 # ==========================================
-# 5. DYNAMIC UI DASHBOARD
+# 5. DYNAMIC UI DASHBOARD (EXPANDED FACTORS)
 # ==========================================
-col1, col2 = st.columns([1, 1.5], gap="large")
+col1, col2 = st.columns([1.2, 1.5], gap="large")
 
 with col1:
-    st.subheader("📥 Live Telemetry Input")
-    st.markdown("Enter real-time data from the vehicle sensors.")
+    st.subheader("📥 Comprehensive Telemetry")
+    st.markdown("Adjust live sensors to simulate vehicle conditions.")
     
     with st.container(border=True):
-        v_id = st.text_input("Vehicle ID", "TRK-092")
-        v_type = st.selectbox("Vehicle Type", ["Heavy Truck", "Delivery Van", "Sprinter"])
+        # Top Row: Basic Info
+        r1_c1, r1_c2, r1_c3 = st.columns(3)
+        v_id = r1_c1.text_input("Vehicle ID", "TRK-092")
+        v_type = r1_c2.selectbox("Type", ["Truck", "Van", "Car"])
+        route = r1_c3.selectbox("Route", ["Highway", "Urban", "Rural"])
         
-        c1, c2 = st.columns(2)
-        with c1:
-            usage = st.number_input("Usage Hours", min_value=0, value=2500, step=100)
-            vib = st.slider("Vibration (G)", 0.0, 10.0, 1.2, step=0.1)
-        with c2:
-            temp = st.number_input("Engine Temp (°C)", min_value=50, value=90, step=1)
-            anom = st.radio("Anomalies Detected?", ["No", "Yes"])
+        st.markdown("---")
+        
+        # Second Row: Engine & Performance
+        r2_c1, r2_c2, r2_c3 = st.columns(3)
+        usage = r2_c1.number_input("Usage Hours", value=2500, step=100)
+        temp = r2_c2.number_input("Engine Temp (°C)", value=90, step=1)
+        vib = r2_c3.slider("Vibration (G)", 0.0, 10.0, 1.2, step=0.1)
+        
+        # Third Row: Consumables & Systems
+        r3_c1, r3_c2, r3_c3 = st.columns(3)
+        tire = r3_c1.slider("Tire Pressure (PSI)", 10, 60, 35)
+        battery = r3_c2.slider("Battery (V)", 10.0, 15.0, 13.5, step=0.1)
+        oil = r3_c3.slider("Oil Quality (%)", 0, 100, 85)
+        
+        # Fourth Row: Diagnostics
+        r4_c1, r4_c2 = st.columns(2)
+        brakes = r4_c1.selectbox("Brake Condition", ["Good", "Fair", "Poor"])
+        anom = r4_c2.radio("System Anomalies?", ["No", "Yes"])
 
         run_btn = st.button("🚀 Run Agentic Diagnostics", use_container_width=True, type="primary")
 
@@ -160,40 +173,40 @@ with col2:
     
     if run_btn:
         if not api_key:
-            st.error("⚠️ Please enter your Groq API Key in the sidebar to activate the AI Agent.")
+            st.error("⚠️ Please enter your Groq API Key in the sidebar.")
         else:
+            # Package ALL the new factors for the agent
             telemetry_data = {
-                "Vehicle ID": v_id, "Vehicle Type": v_type, 
-                "Usage Hours": usage, "Vibration (G)": vib, 
-                "Engine Temp (C)": temp, "Anomalies": anom
+                "Vehicle ID": v_id, "Vehicle Type": v_type, "Route": route,
+                "Usage Hours": usage, "Engine Temp (C)": temp, "Vibration (G)": vib, 
+                "Tire Pressure (PSI)": tire, "Battery Voltage (V)": battery, 
+                "Oil Quality (%)": oil, "Brake Condition": brakes, "Anomalies": anom
             }
             
-            # Watch the Agent Work!
             with st.status("Agentizing Fleet Data...", expanded=True) as status:
-                st.write("📊 Evaluating sensor thresholds...")
+                st.write("📊 Evaluating multi-sensor thresholds...")
                 result = agent.invoke({"telemetry": telemetry_data})
                 
                 if result["risk_detected"]:
-                    st.write("⚠️ Risk detected! Agent routing to manuals...")
-                    st.write("📚 Retrieving FAISS knowledge base...")
+                    st.write("⚠️ Risk detected across sensor array! Routing to manuals...")
+                    st.write("📚 Searching vector database for complex faults...")
                     st.write("✍️ Synthesizing maintenance protocol...")
                 else:
-                    st.write("✅ Telemetry looks good. Bypassing manual retrieval...")
+                    st.write("✅ All systems nominal. Bypassing manual retrieval...")
                 
                 status.update(label="Diagnostic Complete!", state="complete", expanded=False)
             
-            # Display Professional Output
             report = result["final_report"]
             
-            # Use metrics for a dashboard feel
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Current Temp", f"{temp} °C", delta="High" if temp > 110 else "Normal", delta_color="inverse")
-            m2.metric("Vibration", f"{vib} G", delta="Critical" if vib > 3.0 else "Normal", delta_color="inverse")
-            m3.metric("System Risk", "HIGH" if result["risk_detected"] else "LOW", delta_color="off")
+            # Dynamic Metrics Display
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Engine Temp", f"{temp}°C", delta="High" if temp > 110 else "Normal", delta_color="inverse")
+            m2.metric("Battery", f"{battery}V", delta="Low" if battery < 12.0 else "Good", delta_color="normal")
+            m3.metric("Oil Quality", f"{oil}%", delta="Change Due" if oil < 15 else "Good", delta_color="normal")
+            m4.metric("System Risk", "HIGH" if result["risk_detected"] else "LOW", delta_color="off")
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # Structured Report Tabs
             t1, t2, t3 = st.tabs(["📋 Health & Action Plan", "📚 Reference Sources", "⚠️ Disclaimers"])
             
             with t1:
@@ -203,11 +216,9 @@ with col2:
                 else:
                     st.success(f"**Health Summary:**\n{report['health_summary']}")
                     st.info(f"**Action Plan:**\n{report['action_plan']}")
-            
             with t2:
                 st.markdown(f"*{report['sources']}*")
-            
             with t3:
                 st.caption(report['disclaimer'])
     else:
-        st.info("👈 Enter telemetry data on the left and click 'Run Agentic Diagnostics' to generate a report.")
+        st.info("👈 Adjust the telemetry sliders on the left and click 'Run Agentic Diagnostics'.")
