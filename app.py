@@ -65,9 +65,11 @@ class FleetAgentState(TypedDict):
 
 def reason_vehicle_health_node(state: FleetAgentState):
     """Agentic Step 1: Analyze telemetry to decide if deep RAG action is needed."""
-    llm = ChatGroq(temperature=0, model_name="llama3-8b-8192")
     
-    # Analyze critical metrics to determine if the vehicle requires attention
+    # 🟢 FIX: Explicitly pass the API key here
+    api_key = os.environ.get("GROQ_API_KEY")
+    llm = ChatGroq(api_key=api_key, temperature=0, model_name="llama3-8b-8192")
+    
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You are a Fleet AI. Look at the vehicle telemetry. If Vibration_Levels > 3.0, Engine_Temperature > 110, or Anomalies_Detected == 1, reply ONLY with 'True'. Otherwise, reply ONLY with 'False'."),
         ("user", "Telemetry Data: {telemetry}")
@@ -97,7 +99,11 @@ def retrieve_guidelines_node(state: FleetAgentState):
 
 def generate_recommendation_node(state: FleetAgentState):
     """Agentic Step 3: Generates the structured fleet recommendation using RAG."""
-    llm = ChatGroq(temperature=0.1, model_name="llama3-8b-8192")
+    
+    # 🟢 FIX: Explicitly pass the API key here
+    api_key = os.environ.get("GROQ_API_KEY")
+    llm = ChatGroq(api_key=api_key, temperature=0.1, model_name="llama3-8b-8192")
+    
     structured_llm = llm.with_structured_output(FleetRecommendation)
     
     prompt = ChatPromptTemplate.from_messages([
