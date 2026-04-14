@@ -68,7 +68,7 @@ def reason_vehicle_health_node(state: FleetAgentState):
     
     # 🟢 FIX: Explicitly pass the API key here
     api_key = os.environ.get("GROQ_API_KEY")
-    llm = ChatGroq(api_key=api_key, temperature=0, model_name="llama3-8b-8192")
+    llm = ChatGroq(api_key=api_key, temperature=0, model_name="llama-3.1-8b-instant")
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You are a Fleet AI. Look at the vehicle telemetry. If Vibration_Levels > 3.0, Engine_Temperature > 110, or Anomalies_Detected == 1, reply ONLY with 'True'. Otherwise, reply ONLY with 'False'."),
@@ -102,7 +102,7 @@ def generate_recommendation_node(state: FleetAgentState):
     
     # 🟢 FIX: Explicitly pass the API key here
     api_key = os.environ.get("GROQ_API_KEY")
-    llm = ChatGroq(api_key=api_key, temperature=0.1, model_name="llama3-8b-8192")
+    llm = ChatGroq(api_key=api_key, temperature=0.1, model_name="llama-3.1-8b-instant")
     
     structured_llm = llm.with_structured_output(FleetRecommendation)
     
