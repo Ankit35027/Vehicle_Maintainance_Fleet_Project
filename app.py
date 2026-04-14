@@ -103,10 +103,17 @@ def critical_report_node(state: AgentState):
     llm = ChatGroq(model_name="llama-3.1-8b-instant", temperature=0.1).with_structured_output(FleetReport)
     docs = "\n".join([d.page_content for d in state["manual_excerpts"]])
     
+    # 🟢 THE FIX: We update the prompt to force the AI to resolve logical conflicts!
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are the Lead AI Fleet Mechanic. Draft a structured report using ONLY the provided manual excerpts to address the specific telemetry faults."),
-        ("user", "Telemetry: {data}\n\nManual Excerpts: {docs}")
+        ("system", """You are a highly professional Lead AI Fleet Mechanic. Draft a structured, executive-level report to address the telemetry faults. 
+        
+        CRITICAL INSTRUCTIONS:
+        1. Synthesize the telemetry data with the manual excerpts. Do not just copy-paste.
+        2. Resolve logical conflicts: If the manual suggests replacing a part (like Brakes or Tires) due to an anomaly, BUT the telemetry explicitly states that part is in 'Good' condition, DO NOT recommend replacing it. Instead, recommend checking the sensors for false positives.
+        3. Use a highly professional, clinical, and authoritative tone."""),
+        ("user", "Telemetry Data: {data}\n\nRetrieved Manual Excerpts: {docs}")
     ])
+    
     result = (prompt | llm).invoke({"data": state["telemetry"], "docs": docs})
     return {"final_report": result.model_dump()}
 
